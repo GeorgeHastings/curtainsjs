@@ -856,7 +856,9 @@ export class Renderer {
      Dispose our WebGL context and all its objects
      ***/
   dispose() {
-    if (!this.gl) return;
+    // gl is only nulled at the end of this method, so also guard on isActive
+    // to make a second dispose() call a no-op
+    if (!this.gl || !this.state.isActive) return;
 
     this.state.isActive = false;
 
@@ -875,50 +877,43 @@ export class Renderer {
       this.removeRenderTarget(this.renderTargets[0]);
     }
 
-    // wait for all planes to be deleted before stopping everything
-    let disposeQueue = this.nextRender.add(() => {
-      if (
-        this.planes.length === 0 &&
-        this.shaderPasses.length === 0 &&
-        this.renderTargets.length === 0
-      ) {
-        // clear from callback queue
-        disposeQueue.keep = false;
+    // everything above is removed synchronously, so tear the context down right away.
+    // Deferring this to the next render leaks the context for consumers that never
+    // render again after dispose (autoRender: false)
+    this.deletePrograms();
 
-        this.deletePrograms();
+    // clear the buffer to clean scene
+    this.clear();
 
-        // clear the buffer to clean scene
-        this.clear();
+    this.canvas.removeEventListener(
+      "webglcontextlost",
+      this._contextLostHandler,
+      false
+    );
+    this.canvas.removeEventListener(
+      "webglcontextrestored",
+      this._contextRestoredHandler,
+      false
+    );
 
-        this.canvas.removeEventListener(
-          "webgllost",
-          this._contextLostHandler,
-          false
-        );
-        this.canvas.removeEventListener(
-          "webglrestored",
-          this._contextRestoredHandler,
-          false
-        );
+    // lose context
+    if (this.extensions["WEBGL_lose_context"]) {
+      this.extensions["WEBGL_lose_context"].loseContext();
+    }
 
-        // lose context
-        if (this.gl && this.extensions["WEBGL_lose_context"]) {
-          this.extensions["WEBGL_lose_context"].loseContext();
-        }
+    // clear canvas state
+    this.canvas.width = this.canvas.width;
 
-        // clear canvas state
-        this.canvas.width = this.canvas.width;
+    this.gl = null;
 
-        this.gl = null;
+    // remove canvas from DOM (consumers may already have removed it themselves)
+    if (this.canvas.parentNode === this.container) {
+      this.container.removeChild(this.canvas);
+    }
 
-        // remove canvas from DOM
-        this.container.removeChild(this.canvas);
+    this.container = null;
+    this.canvas = null;
 
-        this.container = null;
-        this.canvas = null;
-
-        this.onDisposed && this.onDisposed();
-      }
-    }, true);
+    this.onDisposed && this.onDisposed();
   }
 }
